@@ -810,9 +810,29 @@ ggsave(filename = paste0(wd,"/results/MCC_plot.png"), width = 14, height = 6, un
 
 ```
 
+Add HGVS Nomenclature
+```{r}
+NOMENCLATURE = read.csv('sources/Nomenclature',sep='\t')
+TABLE_S2 = rbind(b1_PREDICTIONS, b2_PREDICTIONS)
+
+TABLE_S2 = TABLE_S2 %>%
+  merge(x=TABLE_S2, y=NOMENCLATURE, by.x='Variant', by.y='ID')
+```
+
+
 Save table S2.
 ```{r write-table}
-write.table(rbind(b1_PREDICTIONS, b2_PREDICTIONS), file='results/TableS2.tsv', sep='\t', row.names = FALSE)
+write.table(TABLE_S2, file='results/TableS2.tsv', sep='\t', row.names = FALSE)
+```
+
+Show Variable Importances for BRCA1
+```{r}
+b1_TRAINED_DATA$vi
+```
+
+Show Variable Importances for BRCA2
+```{r}
+b2_TRAINED_DATA$vi
 ```
 
 ```{r save}
