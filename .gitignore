@@ -5,7 +5,7 @@ BRCA_ML_files
 
 # Session Data files
 .RData
-working/v3.4.RData
+
 # Example code in package build process
 *-Ex.R
 
@@ -35,3 +35,4 @@ vignettes/*.pdf
 
 # Shiny token, see https://shiny.rstudio.com/articles/shinyapps.html
 rsconnect/
+.Rproj.user

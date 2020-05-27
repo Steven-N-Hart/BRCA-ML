@@ -22,6 +22,7 @@ library(h2o)
 library(pROC)
 library(PRROC)
 library(ggpubr)
+library(e1071)
 ```
 
 ```{r get-aligngvgd-data}
@@ -479,36 +480,67 @@ models = read.csv(paste0(wd, '/sources/base_thresholds'), header = FALSE, sep="\
 COLUMNS = models$V1
 ```
 
+
 Run the training
 ```{r train}
 
 #BRCA1
 b1_input = prepare_inputs(gene = 'BRCA1')
 b1_DATA_SPLITS = split_data(b1_input)
-b1_TRAINED_DATA = train_model(b1_DATA_SPLITS)
-# GBM_grid_1_AutoML_20190920_074644_model_55
-b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA$model, threshold = b1_TRAINED_DATA$threshold)
-b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA$model, 
+
+# 05/27/20 Adding new code to make inference easier
+# Load data if it exists
+train=FALSE
+if (train==TRUE){
+  b1_TRAINED_DATA = train_model(b1_DATA_SPLITS)
+  b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA$model, threshold = b1_TRAINED_DATA$threshold)
+  b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA$model, 
                                           gene = 'BRCA1', 
                                           threshold = b1_TRAINED_DATA$threshold)
-b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
+  b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
                                'BRCA1', 
                                splits = b1_DATA_SPLITS, 
                                t_ = b1_TRAINED_DATA$threshold )
+}else{
+  b1_TRAINED_DATA = h2o.loadModel('results/GBM_grid_1_AutoML_20190920_074644_model_55')
+  threshold = b1_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
+  b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA, threshold = threshold)
+  b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA, 
+                                          gene = 'BRCA1', 
+                                          threshold = threshold)
+  b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
+                               'BRCA1', 
+                               splits = b1_DATA_SPLITS, 
+                               t_ = threshold ) 
+}
+
 
 #BRCA2
 b2_input = prepare_inputs(gene = 'BRCA2')
 b2_DATA_SPLITS = split_data(b2_input)
-b2_TRAINED_DATA = train_model(b2_DATA_SPLITS)
-# XGBoost_grid_1_AutoML_20190920_084013_model_2
-b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA$model, threshold = b2_TRAINED_DATA$threshold)
-b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA$model, 
+
+if (train==TRUE){
+  b2_TRAINED_DATA = train_model(b2_DATA_SPLITS)
+  b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA$model, threshold = b2_TRAINED_DATA$threshold)
+  b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA$model, 
                                           gene = 'BRCA2', 
                                           threshold = b2_TRAINED_DATA$threshold)
-b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
+  b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
                                'BRCA2', 
                                splits = b2_DATA_SPLITS, 
                                t_ = b2_TRAINED_DATA$threshold )
+}else{
+  b2_TRAINED_DATA = h2o.loadModel('results/XGBoost_grid_1_AutoML_20190920_084013_model_2')
+  threshold = b2_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
+  b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA, threshold = threshold)
+  b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA, 
+                                          gene = 'BRCA2', 
+                                          threshold = threshold)
+  b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
+                               'BRCA2', 
+                               splits = b2_DATA_SPLITS, 
+                               t_ = threshold )  
+}
 
 ```
 
@@ -520,7 +552,7 @@ get_res = function(input_data, model){
   tmp = merge(tmp, experimental_data)
   tmp = tmp[,c('Call',model)]
   roc_obj <- roc(tmp$Call, tmp[,model])
-  d = t(as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity", "tp", "tn", "fp", "fn"))))
+  d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity", "tp", "tn", "fp", "fn")))
   rownames(d)=NULL
   d = as.data.frame(d)
   d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
@@ -598,7 +630,7 @@ tmp = b1_PREDICTIONS %>%
 tmp = merge(tmp, experimental_data)
 tmp = tmp[,c('Call','BRCA-ML')]
 roc_obj <- roc(tmp$Call, tmp$`BRCA-ML`)
-d = t(as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn"))))
+d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn")))
 rownames(d)=NULL
 d = as.data.frame(d)
 d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
@@ -629,8 +661,6 @@ res_roc_1$PROC = rbind(res_roc_1$PROC, d2)
 rm(d,d1,d2, tmp)
 
 p1 = res_roc_1$ROC %>%
-  #filter(auc > 0.8) %>%
-  #ggplot(aes(y=sensitivities, x=1-specificities, color = paste0(Model,"=", round(auc,3)))) +
   ggplot(aes(y=sensitivities, x=1-specificities, color = Model)) +
   geom_line() +
   scale_fill_brewer(palette="Paired") +
@@ -656,7 +686,7 @@ tmp = b2_PREDICTIONS %>%
 tmp = merge(tmp, experimental_data)
 tmp = tmp[,c('Call','BRCA-ML')]
 roc_obj <- roc(tmp$Call, tmp$`BRCA-ML`)
-d = t(as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn"))))
+d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn")))
 rownames(d)=NULL
 d = as.data.frame(d)
 d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
@@ -684,8 +714,6 @@ res_roc_2$PROC = rbind(res_roc_2$PROC, d2)
 rm(d,d1,tmp)
 
 p2 = res_roc_2$ROC %>%
-  #filter(auc > 0.8) %>%
-  #ggplot(aes(y=sensitivities, x=1-specificities, color = paste0(Model,"=", round(auc,3)))) +
   ggplot(aes(y=sensitivities, x=1-specificities, color = Model)) +
   geom_line() +
   scale_fill_brewer(palette="Paired") +
@@ -762,11 +790,20 @@ tmp = rbind(tmp, tmp2)
 tmp = tmp %>%
   gather(key = "Model", value = 'Value',  `BRCA-ML`:BayesDel)
 
-
+# 05/27/20 Adding new code to make inference easier
 ## Assign damaging score
 tmp$Prediction='Neutral'
-idx1 = which(tmp$Gene == 'BRCA1' & tmp$Value >= b1_TRAINED_DATA$threshold & tmp$Model == 'BRCA-ML')
-idx2 = which(tmp$Gene == 'BRCA2' & tmp$Value >= b2_TRAINED_DATA$threshold & tmp$Model == 'BRCA-ML')
+if (train==TRUE){
+  threshold_b1=b1_TRAINED_DATA$threshold
+  threshold_b2=b2_TRAINED_DATA$threshold
+  
+}else{
+  threshold_b1=b1_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
+  threshold_b2=b2_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
+}
+
+idx1 = which(tmp$Gene == 'BRCA1' & tmp$Value >= threshold_b1 & tmp$Model == 'BRCA-ML')
+idx2 = which(tmp$Gene == 'BRCA2' & tmp$Value >= threshold_b2 & tmp$Model == 'BRCA-ML')
 
 bd_thresh = res_roc_1$RES %>% filter(model=='BayesDel') %>% select(threshold) %>% as.numeric()
 idx3 = which(tmp$Gene == 'BRCA1' & tmp$Value >= bd_thresh & tmp$Model == 'BayesDel')
@@ -794,9 +831,9 @@ res_roc_2$RES$Gene='BRCA2'
 tmp = rbind(res_roc_1$RES, res_roc_2$RES)
 tmp %>%
   dplyr::arrange(1-mcc)
+```
 
-
-
+```{r}
 tmp %>%  
   ggplot(aes(x=model, y=mcc, fill=Gene)) +
   geom_bar(stat='identity') +
@@ -825,16 +862,23 @@ Save table S2.
 write.table(TABLE_S2, file='results/TableS2.tsv', sep='\t', row.names = FALSE)
 ```
 
-Show Variable Importances for BRCA1
+Show Variable Importances for BRCA1 (only when training)
 ```{r}
-b1_TRAINED_DATA$vi
+#b1_TRAINED_DATA$vi
 ```
 
-Show Variable Importances for BRCA2
+Show Variable Importances for BRCA2 (only when training)
 ```{r}
-b2_TRAINED_DATA$vi
+#b2_TRAINED_DATA$vi
 ```
 
+```{r}
+b1_TESTED_DATA$cm
+```
+
+```{r}
+b2_TESTED_DATA$cm
+```
 ```{r save}
 save.image(file="working/v3.4.RData")
 ```
