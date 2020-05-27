@@ -502,6 +502,7 @@ if (train==TRUE){
                                splits = b1_DATA_SPLITS, 
                                t_ = b1_TRAINED_DATA$threshold )
 }else{
+  h2o.init(min_mem_size = "16g", max_mem_size = "32g", nthreads = 1)
   b1_TRAINED_DATA = h2o.loadModel('results/GBM_grid_1_AutoML_20190920_074644_model_55')
   threshold = b1_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
   b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA, threshold = threshold)
