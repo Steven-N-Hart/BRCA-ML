@@ -12,8 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 wd = getwd()
 options(width = 1800)
 knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=TRUE, warning=FALSE, message=FALSE)
-knitr::opts_knit$set(root.dir = wd)
-setwd(wd)
+
 
 library(tidyverse)
 library(data.table)
@@ -694,10 +693,11 @@ get_res = function(input_data, model){
   tmp = input_data$train[,c('Call',model)]
   roc_obj <- roc(tmp$Call, tmp[,model])
   d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity", "tp", "tn", "fp", "fn")))
-  threshold = as.data.frame(t(d))$threshold
-  
+  threshold = unlist(d[1])
+  if(is.null(threshold)){threshold=0.5}
   ################################################################################
   ## 05/28/20
+  tmp$Model='Neutral'
   if (model %in% c("SiftScore")){
     tmp$Model = ifelse(tmp[,model]>threshold,'Neutral','Damaging')
   }else{
