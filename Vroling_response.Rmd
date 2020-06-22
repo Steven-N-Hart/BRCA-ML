@@ -1,0 +1,347 @@
+---
+title: "Response to Vroling"
+output: html_document
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+wd = getwd()
+options(width = 1800)
+knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=TRUE, warning=FALSE, message=FALSE)
+knitr::opts_knit$set(root.dir = wd)
+setwd(wd)
+
+library(tidyverse)
+library(data.table)
+library(caret)
+library(h2o)
+library(pROC)
+library(PRROC)
+library(ggpubr)
+library(e1071)
+```
+
+# Overview
+
+On 05/26/2020, I received an email from Bas Vroling who identified/suggested several major issues with our original submission. I will address each of them here.They can be broken down into the following issues:
+
+ * Issue #1: Figure 2.(valid)
+ * Issue #2: BRCA1 data set creation (valid)
+ * Issue #3: Errors in the process (invalid/valid)
+ * Issue #4: The model performs worse than its input features (invalid)
+
+## TLDR
+
+After reviewing the issues raised by Dr Vroling we have found the following issues:
+ 
+ * __Paper Issues__
+   * Figure Legend 1
+     * Editing of text in the Figure legend indicating the curves reflect the cross validation set (Update #4)
+     * Change the title to "Receiver operating curves (top) and precision-recall curves (bottom) for BRCA1 (*left*) and BRCA2 (*right*)"
+   * Figure Legend 2
+     * Change title to "BayesDel (*bottom*) versus BRCA-ML (*top*) score distribution by gene" 
+   * Methods
+     * Text describing the BRCT and RING domains are incorrectly labeled as each other "(RING: amino acids 1–109, BRCT: amino acids 1642–1855)"
+ * __Code Issues__
+    * Incorrect parsing of amino acids from BRCA1 in dbNSFP (Update #1, #2)
+    * Metrics calculated on all data, not just the test set (Update #3)
+
+## Recommendations
+
+ 1. Submit a correction to the journal for the text changes that were identified
+ 2. Create a new release of BRCA-ML that accurately reports metrics and fixes the bugs
+
+
+In summary, we have found the bugs identified by Vroling and have implemented corrections for them. We do not believe this affected the manuscript in any major way as the findings are confirmed by reproducing the entire process from end-to-end (after making the suggested edits). All software has bugs, but we are committed to fixing any that are brought to our attention.  We thank Dr. Vroling for his throughout assessment.
+
+_________________________________________________________________
+
+# Point-by-point response
+
+## Issue #1: Figure 2.
+
+Vroling makes several points about figure 2:
+
+  * BRCA1 is listed to include ~1500 residues. The transcript used (hinted at) is 1863 residues long. 
+  * Even though this graph should show predictions for the entire BRCA1 protein (each amino acid
+substitution), there are missing areas.
+ * No threshold value is given for this graph. An unusual threshold of ~0.92 is implied
+
+Let's deal with these one at a time.
+ 
+> *BRCA1 is listed to include ~1500 residues. The transcript used (hinted at) is 1863 residues long.*
+
+The number of residues in dbNSFP for BRCA1 is 1955.
+
+```{r}
+all_annotations = read.csv('sources/v3.4a.out',header=TRUE, stringsAsFactors = FALSE, sep="\t")
+
+ all_annotations %>%
+  filter(Genename == 'BRCA1') %>% arrange(AApos) %>% 
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow()
+```
+ 
+Since BayesDel and AlignGVGD are not part of dbNSFP, I added them manually:
+
+```{r}
+
+#Get BayesDel
+bd = read.csv('sources/BayesDel_nsfp33a_noAF.tsv',header=TRUE, sep="\t", skip = 132)
+bd$ID=NULL
+
+names(bd) =c("Chr", "Pos", "Ref", "Alt", "BayesDel")
+all_annotations = merge(all_annotations, bd, all.x=TRUE)
+rm(bd)
+print("Finished BayesDel")
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow()
+
+#Get AlignGVGD
+agvgd = read.csv('sources/alignGvgd.tsv', header=TRUE, sep="\t", stringsAsFactors = FALSE)
+names(agvgd) =c("Chr", "Pos", "Ref", "Alt", "AlignGVGDPrior")
+all_annotations = merge(all_annotations, agvgd, all.x=TRUE)
+rm(agvgd)
+
+print("Finished AGVGD")
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow()
+```
+All good so far, 
+
+```{r echo=FALSE, results='asis'}
+all_annotations_new = all_annotations # Save for later
+all_annotations_old = all_annotations # Save for later
+
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(Chr:SiftScore) %>%
+  head() %>%
+  knitr::kable()
+```
+
+At this point I need to parse out the data, since BRCA1 has pipe separated values. To do this, I select the highest number, using the max function for every score - but also the BRCA1 AApos
+
+```{r echo=FALSE, results='asis'}
+all_annotations = all_annotations_old
+
+for (j in names(all_annotations)[6:ncol(all_annotations)]){
+    if (typeof(all_annotations[,j]) == 'character'){
+      # Get the maximum score
+      all_annotations[,j] = suppressWarnings(sapply(strsplit(all_annotations[,j], "\\|"), function(x) (max(x,na.rm = TRUE))) %>% as.numeric())
+      
+    }
+}
+
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(Chr:SiftScore) %>%
+  head() %>%
+  knitr::kable()
+```
+
+
+#### Update #1
+But compared to the previous step, the largest amino acid for BRCA1 (17,41197695,T,A) *should* have been 1885.  This is because the values selected during the string split were not converted to the numeric type first. However, the AApos is only used for plotting purposes, and variants are combined using chrom_pos_ref_alt instead of amino acid positions.
+
+```{r echo=FALSE, results='asis'}
+all_annotations = all_annotations_new
+
+for (j in names(all_annotations)[6:ncol(all_annotations)]){
+    if (typeof(all_annotations[,j]) == 'character'){
+      # Get the maximum score
+      all_annotations[,j] = suppressWarnings(sapply(strsplit(all_annotations[,j], "\\|"), function(x) (max(as.numeric(x),na.rm = TRUE))) %>% as.numeric())
+      all_annotations[,j] = ifelse(all_annotations[,j]==-Inf,NA,all_annotations[,j]) # Replace all '-Inf' with NA to conform to the previous iterations
+      
+    }
+}
+
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  head() %>%
+  knitr::kable()
+```
+
+
+```{r}
+print("Finished cleaning multi amino acids")
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow()
+
+all_annotations = all_annotations %>%
+  filter(AApos>0)
+
+print("Removing those with no real amino acid")
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow()
+
+keep = names(all_annotations)[-grep("Rankscore",names(all_annotations))]
+all_annotations = all_annotations[,keep]
+
+all_annotations = all_annotations %>%
+  mutate(Variant = paste(Chr,Pos,Ref,Alt,sep='_'))
+rm(keep, j)
+
+print("Final")
+
+all_annotations %>%
+  filter(Genename == 'BRCA1') %>%
+  select(AApos) %>%
+  arrange(AApos) %>%
+  unique() %>%
+  nrow() 
+```
+
+This is inline with the number of residues we expect from BRCA1.
+
+```{r}
+all_annotations %>%
+  ggplot(aes(x=AApos,y=BayesDel)) +
+  geom_point() +
+  facet_wrap( ~Genename, scales = "free")
+```
+
+We will have to come back top the issue of threshold, since the objective will be to retrain after applying this correction.
+_________________________________________________________________
+
+
+## Issue #2: BRCA1 data set creation
+
+ * 1. dbNSFP mapping errors (detailed above)
+ * 2. Starita parsing errors
+ 
+### Update #2.
+I also noticed that the data I have in the repository does not match what is in Starita et. al Table S7 does not exactly match what I have in the repository.  It appears to be a combined file of Findlay and Starita.  I have downloaded Table S7 from Starita and Table S1 from Findlay, and have updated the code to reflect the change.
+ 
+Starita's paper had 1062 rows of data in Supplemental Table 7.
+
+```{r starita}
+#######################################################################################################################################
+#Read in Starita
+# RawData
+raw_data = read.csv('sources/StaritaST7.tsv.txt', header = TRUE, sep = "\t", stringsAsFactors = FALSE, na.strings = c('.'))
+raw_data %>% nrow()
+```
+
+
+Lets load the annotations so we can map between sources, which are 14,108 possible results from single-base changes.
+```{r}
+# Read in annotations from CAVA
+CAVA = read.csv('sources/CAVA_BRCA1.txt',header = FALSE, sep = "\t", stringsAsFactors = FALSE, na.strings = c('.'))
+names(CAVA)=c('CSN','Gene','cpra','variantID', 'refAA','AApos', 'altAA')
+CAVA %>% nrow()
+
+```
+
+Merging the CAVA/dbNSFP and Starita data, we see that several mutations are not present in the CAVA set. In fact, only 425/1066 (40%) are accounted for.
+```{r}
+merged = merge(raw_data, CAVA, by='variantID')
+
+merged %>% 
+  select(cpra, Starita_HDR_predict,variantID ) %>%
+  nrow() 
+```
+
+So where did the rest of the data go?  Let's keep all the Starita variants this time.And we will dig in to `A102D` from Starita, which was not found with the dbNSFP mapping.
+
+#### Starita File
+```{r echo=FALSE, results='asis'}
+raw_data %>%
+  filter(variantID=='A102D') %>%
+  knitr::kable()
+```
+
+#### CAVA Annotations from dbNSFP
+The codon sequence of amino acid 102 is `gCa`, where `C` is the reference amino acid. the `gca` codon results in Alalnine, which is the reference amino acid.  The only codons that produce `D` are `gau` and `gat`. To achieve this amino acid, at least two nucleotides would need to be modified, which is not available in dbNSFP which we also state at the end of the results section "every possible missense mutation caused by a single-nucleotide variation", and in the discussion "there are over 12,520 and 22,772 possible single-nucleotide variants in BRCA1 and BRCA2". This explains why only a portion of Starita data were able to be used in or model.
+
+Here are the annotatiotions I have for amino acid 102 from dbNSFP:
+
+```{r echo=FALSE, results='asis'}
+CAVA %>% 
+  filter(AApos==102) %>%
+  knitr::kable()
+```
+
+__________________________________________________________________________________________________________________________________
+
+## Issue #3: Errors in the process
+ * Performance on the holdout test set is never used for reporting
+ * Instead of using the test set to assess the performance of the generated ML model, the TRAINING set is used to create figure 1
+ * Precision/recall scores appear to be based on these graphs
+
+### Update #3
+The performance metrics for the previous models was actually reported on the training data, instead of the test data. This would cause their true accuracy to be inflated. 
+ 
+In the `compute_optimal() -> get_res()` function, I had indeed used training variants to generate an optimal threshold for the other missense predictors.  This was intentional, since I wanted to determine an optimal cut point that would maximize their accuracy. However, the calculated metrics should have been restricted to the test set, which I accept is an error. A new section in the `get_res` function has been added to account for this.
+
+So let's see how the data are when corrected for Starita/Findlay, training-testing separation:
+
+```{r echo=FALSE}
+load('working/v3.4_rel2.RData')
+```
+
+```{r}
+metrics_table %>% 
+  filter(missingness < 1) %>%   # mutPred and MCap did not score for all variants
+  arrange(-mcc) %>%
+  knitr::kable()
+```
+
+From the table above, you can see that the MCC for BRCA1 (even after the corrections) is the essentially the same as what was reported in the paper (now MCC=0.68 vs then MCC=0.66)
+__________________________________________________________________________________________________________________________________
+
+
+> *Instead of using the test set to assess the performance of the generated ML model, the TRAINING set is used to create figure 1*
+
+1. The published curves should not have used BRCA-ML from the training set. Instead, it should have plotted the result from the cross-validation set which we show below:
+
+```{r}
+ggarrange(p1, p2, p3, p4, common.legend = TRUE, legend = "right")
+```
+
+
+> *Precision/recall scores appear to be based on these graphs*
+
+### Update #4.
+As noted above, the curves are shown relative to the cross validation performance of BRCA-ML.  The reported metrics however are derived from confusion matrices at a given threshold for each tool on the test set.  The legend of the figure is incorrect and the words *"for the hold out test set"* should be changed to *"for the cross-validation set"*.
+
+
+## Issue #4: The model performs worse than its input features
+
+> *The holdout test set only contains 17 damaging variants. 3 of these were classified correctly. The code does not produce a correctly stratified set. Associated MCC with an optimized threshold is 0.41, far lower than advertised and not substantially higher than MutPredScore (0.4) which BRCA-ML claims to improve upon and even incorporates as a feature. Sensitivity is 0.17. This means that this model will find only 17% of damaging mutations in the sole
+protein it was trained on.*
+
+I do not get the same number as Dr. Vroling in the original analysis. It appears his numbers are flipped.
+
+```{r}
+metrics_table %>%
+  filter(missingness < 1) %>%
+  filter(Gene=='BRCA1', model=='BRCA-ML') %>%
+  knitr::kable()
+```

@@ -23,6 +23,11 @@ library(pROC)
 library(PRROC)
 library(ggpubr)
 library(e1071)
+
+# Change to TRUE to generate new models
+train=FALSE
+v_fold_nest = 5
+training_time_limit=3600
 ```
 
 ```{r get-aligngvgd-data}
@@ -45,12 +50,25 @@ rm(agvgd)
 
 for (j in names(all_annotations)[6:ncol(all_annotations)]){
     if (typeof(all_annotations[,j]) == 'character'){
-      #all_annotations[,j] = vapply(strsplit(all_annotations[,j],"\\|"), `[`, 1, FUN.VALUE=character(1)) %>% as.numeric()
       # Get the maximum score
-      all_annotations[,j] = suppressWarnings(sapply(strsplit(all_annotations[,j], "\\|"), function(x) (max(x,na.rm = TRUE))) %>% as.numeric())
-      
+      all_annotations[,j] = suppressWarnings(sapply(strsplit(all_annotations[,j], "\\|"), function(x) (max(as.numeric(x),na.rm = TRUE))) %>% as.numeric())
+      # Remove -Inf
+      all_annotations[which(all_annotations[,j] =='-Inf'),j] = NA
     }
 }
+######################################################
+# Add my own AAPos Annotations
+b1=read.csv('sources/CAVA_BRCA1.txt', header = FALSE, sep='\t', stringsAsFactors = FALSE)
+b2=read.csv('sources/CAVA_BRCA2.txt', header = FALSE, sep='\t', stringsAsFactors = FALSE)
+b3 = rbind(b1,b2)
+names(b3) = c('CSN','Gene','Variant','ProtChange','RefProt','AApos','AltProt')
+b3 = b3[,c('Gene','Variant','AApos')]
+b3$AApos = as.numeric(b3$AApos)
+all_annotations = all_annotations %>%
+  mutate(Variant = paste(Chr,Pos,Ref,Alt,sep='_'), AApos=NULL)
+all_annotations = merge(all_annotations, b3, by="Variant", all.x=TRUE)
+######################################################
+
 
 all_annotations = all_annotations %>%
   filter(AApos>0)
@@ -58,11 +76,12 @@ all_annotations = all_annotations %>%
 keep = names(all_annotations)[-grep("Rankscore",names(all_annotations))]
 all_annotations = all_annotations[,keep]
 
-all_annotations = all_annotations %>%
-  mutate(Variant = paste(Chr,Pos,Ref,Alt,sep='_'))
 rm(keep, j)
 #glimpse(all_annotations)
 ```
+
+
+# This should be on test set?
 
 Plot all predictions
 ```{r eval = FALSE, echo = FALSE}
@@ -101,7 +120,7 @@ rm(model, p, tmp)
 Set some useful functions
 ```{r useful-functions}
 
-# Create a filter to remove nything not in the BRCT/RING domains of BRCA1 and the DNA binding domain of BRCA2
+# Create a filter to remove anything not in the BRCT/RING domains of BRCA1 and the DNA binding domain of BRCA2
 filter_to_target_regions = function(d, variant_search = FALSE, l = links)
 {
   RING_prot = c(1, 109)
@@ -155,8 +174,8 @@ links = all_annotations %>%
 Load all functional data
 ```{r get-functional-data}
 #Read in our data
-neutral_list = read.csv(paste0(wd, "/sources/neutral.list"),sep = "\t",header = FALSE, stringsAsFactors = FALSE)
-damaging_list = read.csv(paste0(wd, "/sources/deleterious.list"),sep = "\t",header = FALSE, stringsAsFactors = FALSE)
+neutral_list = read.csv("sources/neutral.list",sep = "\t",header = FALSE, stringsAsFactors = FALSE)
+damaging_list = read.csv("sources/deleterious.list",sep = "\t",header = FALSE, stringsAsFactors = FALSE)
 
 Hart_df = rbind(neutral_list,damaging_list)
 names(Hart_df) = c("Gene","Variant","Call", "Source")
@@ -164,21 +183,46 @@ names(Hart_df) = c("Gene","Variant","Call", "Source")
 Hart_df = filter_to_target_regions(Hart_df, variant_search = TRUE)
 
 rm(neutral_list, damaging_list)
+
+
+# Read in annotations from CAVA
+CAVA_BRCA1 = read.csv('sources/CAVA_BRCA1.txt',header = FALSE,
+                   sep = "\t", stringsAsFactors = FALSE, 
+                   na.strings = c('.'))
+names(CAVA_BRCA1)=c('CSN','Gene','cpra','variantID', 'refAA','AApos', 'altAA')
+
+# Read in annotations from CAVA
+CAVA_BRCA2 = read.csv('sources/CAVA_BRCA2.txt',header = FALSE,
+                   sep = "\t", stringsAsFactors = FALSE, 
+                   na.strings = c('.'))
+names(CAVA_BRCA2)=c('CSN','Gene','cpra','variantID', 'refAA','AApos', 'altAA')
+
 ```
 
 ```{r starita}
 #######################################################################################################################################
 #Read in Starita
 #Get data
-Starita = read.csv(paste0(wd, '/sources/Starita.tsv'),header = TRUE,
-                   sep = "\t", stringsAsFactors = FALSE, 
-                   na.strings = c('.'))
-
 HDR_damaging_max = 0.33
 HDR_neutral_min = 0.77
 
+# Update 05/26/2019: Start from Startia et al Table S7, as an input
+Starita = read.csv('sources/StaritaST7.tsv.txt',header = TRUE,
+                   sep = "\t", stringsAsFactors = FALSE, 
+                   na.strings = c('.'))
+
+# Need to merge annotations so I can cross-reference
+Starita = merge(Starita, CAVA_BRCA1, by='variantID')
+# Remove duplicate variants
+Starita = Starita %>%
+  select(Starita_HDR_predict, variantID, cpra) %>%
+  unique()
+Starita$HDR=as.numeric(Starita$Starita_HDR_predict)
+
 Starita = Starita %>%
   filter(HDR <=   HDR_damaging_max | HDR >=  HDR_neutral_min)
+
+
 
 Starita_df = data.frame(
   Variant = as.character(Starita$cpra),
@@ -189,7 +233,8 @@ Starita_df = na.omit(Starita_df)
 
 Starita_df = Starita_df %>%
   select(Gene, Variant, Call) %>%
-  mutate(Source = "Starita et al., 2015")
+  mutate(Source = "Starita et al., 2015") %>%
+  unique()
 
 Starita_df    = filter_to_target_regions(Starita_df, variant_search = TRUE)
 
@@ -201,7 +246,7 @@ rm(Starita, HDR_damaging_max, HDR_neutral_min)
 #######################################################################################################################################
 #Read in Fernandes
 #Get data
-Fernandes = read.csv(paste0(wd, "/sources/Fenandez.tsv"), header = TRUE, 
+Fernandes = read.csv('sources/Fenandez.tsv', header = TRUE, 
                      sep = "\t", stringsAsFactors = FALSE)
 #Remove WT and splic variants
 omit = Fernandes$variant[grep('del|\\+|WT|\\/|ins',Fernandes$variant)]
@@ -211,26 +256,40 @@ Fernandes = Fernandes %>%
   filter(IARC %in% c(0,1,4,5)) %>%
   mutate(Call = ifelse(IARC > 2, "Damaging", "Neutral"), Gene = 'BRCA1') %>%
   select(Gene, Variant, Call) %>%
-  mutate(Source = "Fernandes et al., 2019")
+  mutate(Source = "Fernandes et al., 2019") %>%
+  unique()
 
 Fernandes_df    = filter_to_target_regions(Fernandes, variant_search = TRUE)
 
 rm(Fernandes, omit)
+
 ```
 
 ```{r findlay}
 #######################################################################################################################################
 #Read in Findlay
 #Get data
-Findaly = read.csv(paste0(wd, '/sources/Findlay.tsv'), header = TRUE,sep = "\t", 
+
+# Update 05/26/2019: Start from Findlay et al Table S1, as an input
+
+Findaly = read.csv('sources/Findlay_ST1.txt', header = TRUE,sep = "\t", 
                    stringsAsFactors = FALSE, na.strings = c('','NA','.'))
+Findaly = Findaly %>% 
+  mutate(cpra=paste(chromosome,`position..hg19.`,reference,alt,sep="_" ))
+# Merge with annotations
+Findaly = merge(Findaly, CAVA_BRCA1, by='cpra')
+
+
 # Exclude splicing (1/28)
 Findaly = Findaly %>%
-  filter(Type %in% c('missense_variant'), Call %in% c('Deleterious','Neutral'))
+  filter(consequence=='Missense', func.class %in% c('FUNC','LOF')) 
+
+AlreadySeen = c(Fernandes_df$Variant, Starita_df$Variant)
+Findaly$AlreadySeen = as.numeric(Findaly$cpra %in% AlreadySeen)
 
 Fin_df = data.frame(
   Gene = Findaly$Gene,
-  Variant = Findaly$CPRA,
+  Variant = Findaly$cpra,
   Call = Findaly$func.class,
   Score = Findaly$function.score.mean,
   Seen = Findaly$AlreadySeen)
@@ -242,7 +301,8 @@ Findlay_df$Call =  ifelse(Findlay_df$Call ==  'FUNC', 'Neutral', 'Damaging')
 
 Findlay_df = Findlay_df %>%
   select(Gene, Variant, Call) %>%
-  mutate(Source = "Findlay et al., 2018")
+  mutate(Source = "Findlay et al., 2018") %>%
+  unique()
 
 Findlay_df = filter_to_target_regions(Findlay_df, variant_search = TRUE)
 
@@ -330,13 +390,13 @@ split_data = function(known_scores, validation_fraction = 0.2 ){
   #Shuffle randomly
   idx = sample(idx)
   
-  train = known_scores[idx,]
-  test = known_scores[-idx,]
+  train_t = known_scores[idx,]
+  test_t = known_scores[-idx,]
   splits = NULL
   splits$test = NULL
   splits$train = NULL
-  splits$train = train
-  splits$test = test
+  splits$train = train_t
+  splits$test = test_t
   return(splits)
 }
 
@@ -367,15 +427,17 @@ k_fold_split_data = function(known_scores, k=10 ){
 train_model = function(splits, k_=NULL, Gene = 'BRCA1'){
   knitr::opts_chunk$set(echo=FALSE)
 
-  h2o.init(min_mem_size = "16g", max_mem_size = "32g", nthreads = 20)
+  h2o.init(min_mem_size = "8g", max_mem_size = "12g", nthreads = 10)
   
-  train = as.h2o(splits$train)
+  train_ = as.h2o(splits$train)
   
   all_h2o_models =  h2o.automl(x = COLUMNS, y = "Call",
-                  training_frame = train,
+                  training_frame = train_,
                   keep_cross_validation_predictions = TRUE,
+                  keep_cross_validation_models=TRUE,
+                  keep_cross_validation_fold_assignment=TRUE,
                   nfolds = 5,
-                  max_runtime_secs = 3600,
+                  max_runtime_secs = training_time_limit,
                   sort_metric = 'mean_per_class_error',
                   stopping_metric = 'mean_per_class_error',
                   seed = 100)
@@ -384,14 +446,15 @@ train_model = function(splits, k_=NULL, Gene = 'BRCA1'){
   #Save the model
   best_model = h2o.saveModel(object = all_h2o_models@leader,path = "results/",force = TRUE)
   best_model
-  all_h2o_models
-
+  cv_predictions = h2o.getFrame(all_h2o_models@leader@model[["cross_validation_holdout_predictions_frame_id"]][["name"]])
+  cv_groups = h2o.getFrame(all_h2o_models@leader@model[["cross_validation_fold_assignment_frame_id"]][["name"]])
   # Load model
   model_out = h2o.loadModel(best_model)
   model_vi  = as.data.frame(all_h2o_models@leader@model$variable_importances)
   threshold = h2o.find_threshold_by_max_metric(h2o.performance(model_out), 'absolute_mcc')
   my_list   = list('all_h2o_models' = all_h2o_models, 'best_model' = best_model, 
-                   'model' = model_out, 'vi' =  model_vi, 'threshold' = threshold)
+                   'model' = model_out, 'vi' =  model_vi, 'threshold' = threshold, 
+                   'cv_predictions' = as.data.frame(cv_predictions), cv_groups = as.data.frame(cv_groups))
   return(my_list)
   }
 
@@ -449,7 +512,6 @@ plot_full_gene = function(data, title, splits = splits, model_name='BRCA-ML', t_
     variants = NULL
   }
   
-
   tmp = data[,c("Genename","BRCA-ML","AApos","Prediction")]
   tmp$Model = model_name
   names(tmp) = c("Gene","Score","AApos","Prediction","Model")
@@ -474,92 +536,191 @@ plot_full_gene = function(data, title, splits = splits, model_name='BRCA-ML', t_
 
 ```
 
+```{r}
+  get_cv_estimate = function(gene='BRCA1'){
+    h2o.init(min_mem_size = "8g", max_mem_size = "10g", nthreads = 36)
+    # Nested cross validation of the "pick the leader" process
+    #bx_input = b1_DATA_SPLITS$train
+    if (gene == 'BRCA1'){
+      bx_input = b1_DATA_SPLITS$train
+    }else{
+      bx_input = b2_DATA_SPLITS$train
+    }
+    bx_DATA_SPLITS = k_fold_split_data(bx_input)  # change to k-fold CV, 2020-05-28
+    
+    preds = NULL
+    for(v in 1:v_fold_nest) {
+        train_v <- bx_DATA_SPLITS[which(bx_DATA_SPLITS$Fold != v), ]
+        test_v <- bx_DATA_SPLITS[which(bx_DATA_SPLITS$Fold == v), ]
+        
+        train = as.h2o(train_v)
+        all_h2o_models = h2o.automl(x = COLUMNS, y = "Call",
+                        training_frame = train,
+                        keep_cross_validation_predictions = FALSE, # don't need these
+                        nfolds = 5,  # should be increased to 10?
+                        max_runtime_secs = training_time_limit,
+                        algo_parameters = list(list(min_rows=-1)),
+                        sort_metric = 'mean_per_class_error',
+                        stopping_metric = 'mean_per_class_error',
+                        seed = 100)
+        test = as.h2o(test_v)
+        pred = h2o.predict(all_h2o_models@leader, newdata = test)
+        pred= as.data.frame(pred)
+        pred = cbind(pred, test_v)
+        preds = rbind(preds, pred)
+
+        write.csv(preds, file=paste0(gene,'_res.fold',v,'.csv'))
+    }
+    return(preds)
+  }
+
+
+```
+
 Define columns to TRAIN on
+
 ```{r get-thresholds}
-models = read.csv(paste0(wd, '/sources/base_thresholds'), header = FALSE, sep="\t", stringsAsFactors = FALSE)
+models = read.csv('sources/base_thresholds', header = FALSE, sep="\t", stringsAsFactors = FALSE)
 COLUMNS = models$V1
 ```
 
-
-Run the training
-```{r train}
-
+Prepare inputs for the training
+```{r data_prep}
 #BRCA1
 b1_input = prepare_inputs(gene = 'BRCA1')
 b1_DATA_SPLITS = split_data(b1_input)
 
-# 05/27/20 Adding new code to make inference easier
-# Load data if it exists
-train=FALSE
+b2_input = prepare_inputs(gene = 'BRCA2')
+b2_DATA_SPLITS = split_data(b2_input)
+```
+
+Calculate nested cross validation metrics
+```{r b1-cv}
+#Add in metrics from our current model
+if (train==TRUE){
+  b1_cv = get_cv_estimate(gene = 'BRCA1') # WARNING! THIS TAKES AN EXTREMELY LONG TIME!!
+  b2_cv = get_cv_estimate(gene = 'BRCA2') # WARNING! THIS TAKES AN EXTREMELY LONG TIME!!
+} else{
+  for (v in 1:v_fold_nest){
+    b1_cv = NULL
+    b2_cv = NULL
+    b1 = read.csv(paste0('BRCA1_res.fold',v,'.csv'))
+    b1_cv = rbind(b1_cv, b1)
+    b2 = read.csv(paste0('BRCA2_res.fold',v,'.csv'))
+    b2_cv = rbind(b2_cv, b2)
+    b1_cv = na.omit(b1_cv)
+    b2_cv = na.omit(b2_cv)
+  }
+}
+```
+
+Train
+```{r train_brca1}
 if (train==TRUE){
   b1_TRAINED_DATA = train_model(b1_DATA_SPLITS)
-  b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA$model, threshold = b1_TRAINED_DATA$threshold)
-  b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA$model, 
+}else{
+  h2o.init()
+  model_out = h2o.loadModel('results/GBM_grid__1_AutoML_20200622_080955_model_22')
+  model_vi  = as.data.frame(model_out@model$variable_importances)
+  threshold = h2o.find_threshold_by_max_metric(h2o.performance(model_out), 'absolute_mcc')
+  
+  b1_TRAINED_DATA   = list('all_h2o_models' = NULL, 'best_model' = model_out@model_id, 
+                   'model' = model_out, 'vi' =  model_vi, 'threshold' = threshold, 
+                   'cv_predictions' = b1_cv)
+
+}
+b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA$model, threshold = b1_TRAINED_DATA$threshold)
+b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA$model, 
                                           gene = 'BRCA1', 
                                           threshold = b1_TRAINED_DATA$threshold)
-  b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
+b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
                                'BRCA1', 
                                splits = b1_DATA_SPLITS, 
                                t_ = b1_TRAINED_DATA$threshold )
-}else{
-  h2o.init(min_mem_size = "16g", max_mem_size = "32g", nthreads = 1)
-  b1_TRAINED_DATA = h2o.loadModel('results/GBM_grid_1_AutoML_20190920_074644_model_55')
-  threshold = b1_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
-  b1_TESTED_DATA = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA, threshold = threshold)
-  b1_PREDICTIONS = apply_model_to_gene(model = b1_TRAINED_DATA, 
-                                          gene = 'BRCA1', 
-                                          threshold = threshold)
-  b1_PLOTS = plot_full_gene(b1_PREDICTIONS, 
-                               'BRCA1', 
-                               splits = b1_DATA_SPLITS, 
-                               t_ = threshold ) 
-}
+```
 
+```{r train_brca2}
 
 #BRCA2
-b2_input = prepare_inputs(gene = 'BRCA2')
-b2_DATA_SPLITS = split_data(b2_input)
 
 if (train==TRUE){
   b2_TRAINED_DATA = train_model(b2_DATA_SPLITS)
-  b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA$model, threshold = b2_TRAINED_DATA$threshold)
-  b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA$model, 
+  }else{
+   h2o.init()
+  model_out = h2o.loadModel('results/GBM_grid__1_AutoML_20200622_085730_model_23')
+  model_vi  = as.data.frame(model_out@model$variable_importances)
+  threshold = h2o.find_threshold_by_max_metric(h2o.performance(model_out), 'absolute_mcc')
+  # Get CV predictions
+  cv_predictions=NULL
+  cv_groups=NULL
+  b2_cv_holdouts=NULL
+  for (i in 1:v_fold_nest){
+    tmp = read.csv(paste0('BRCA2_res.fold',i,'.csv'))
+
+    test = as.h2o(tmp)
+    pred = h2o.predict(model_out, newdata = test)
+    tmp = tmp %>% select('Call','Variant')
+    tmp_df = data.frame(Call=tmp$Call, Variant=tmp$Variant, cv_pred=as.data.frame(pred)[, "Damaging"],Fold=i)
+    cv_predictions = rbind(cv_predictions, tmp_df)
+    b2_cv_holdouts = rbind(b2_cv_holdouts, as.data.frame(pred))
+    cv_groups = rbind(cv_groups, data.frame(fold_assignment=rep(i,nrow(tmp))))
+  }
+  b2_TRAINED_DATA   = list('all_h2o_models' = NULL, 'best_model' = model_out@model_id, 
+                   'model' = model_out, 'vi' =  model_vi, 'threshold' = threshold, 
+                   'cv_predictions' = as.data.frame(cv_predictions), cv_groups = as.data.frame(cv_groups))
+  b2_cv_holdouts$cv_pred = b2_cv_holdouts$Damaging
+  }
+
+
+b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA$model, threshold = b2_TRAINED_DATA$threshold)
+b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA$model, 
                                           gene = 'BRCA2', 
                                           threshold = b2_TRAINED_DATA$threshold)
-  b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
+b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
                                'BRCA2', 
                                splits = b2_DATA_SPLITS, 
                                t_ = b2_TRAINED_DATA$threshold )
-}else{
-  b2_TRAINED_DATA = h2o.loadModel('results/XGBoost_grid_1_AutoML_20190920_084013_model_2')
-  threshold = b2_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
-  b2_TESTED_DATA = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA, threshold = threshold)
-  b2_PREDICTIONS = apply_model_to_gene(model = b2_TRAINED_DATA, 
-                                          gene = 'BRCA2', 
-                                          threshold = threshold)
-  b2_PLOTS = plot_full_gene(b2_PREDICTIONS, 
-                               'BRCA2', 
-                               splits = b2_DATA_SPLITS, 
-                               t_ = threshold )  
-}
 
 ```
 
 Make functions to determine cutoff for other missense predictors
+
 ```{r calculate-cutoffs}
 get_res = function(input_data, model){
+  
+  ## Use the training data to get an optimal threshold
+  
   # Make a df that merges the experimental results with predictors
-  tmp = input_data$train[,c('Variant',model)]
-  tmp = merge(tmp, experimental_data)
-  tmp = tmp[,c('Call',model)]
+  tmp = input_data$train[,c('Call',model)]
   roc_obj <- roc(tmp$Call, tmp[,model])
   d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity", "tp", "tn", "fp", "fn")))
+  threshold = as.data.frame(t(d))$threshold
+  
+  ################################################################################
+  ## 05/28/20
+  if (model %in% c("SiftScore")){
+    tmp$Model = ifelse(tmp[,model]>threshold,'Neutral','Damaging')
+  }else{
+    tmp$Model = ifelse(tmp[,model]<threshold,'Neutral','Damaging')  
+  }
+  cm = confusionMatrix(as.factor(tmp$Model), as.factor(tmp$Call), positive="Damaging")
+  tp=cm$table[1]
+  fn=cm$table[2]
+  fp=cm$table[3]
+  tn=cm$table[4]
+  sensitivity=cm$byClass[1]
+  specificity=cm$byClass[2]
+  # Add no call information
+  missingness = (nrow(tmp)-sum(cm$table))/nrow(tmp) * 100
+  d = data.frame(tp=tp,fp=fp,fn=fn,tn=tn,sensitivity=sensitivity,specificity=specificity, threshold=threshold, model=model, missingness=missingness)
+  ################################################################################
   rownames(d)=NULL
   d = as.data.frame(d)
   d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
   d$model = model
   pr_1 =NULL
   # Add precision recall
+  
   idx = which(tmp$Call=='Neutral')
   tryCatch(
     {
@@ -618,35 +779,42 @@ compute_optimal = function(input_data=b1_DATA_SPLITS){
 ```
 
 
-Compute for BRCA1
+Compute optimal for BRCA1
 ```{r compute-brca1-optimal}
-res_roc_1 = compute_optimal()
+res_roc_1 = compute_optimal(input_data=b1_DATA_SPLITS)
 ```
 
-
 ```{r merge-brca1}
-#Add in metrics from our current model
-tmp = b1_PREDICTIONS %>% 
-  filter(Variant %in% experimental_data$Variant)
-tmp = merge(tmp, experimental_data)
-tmp = tmp[,c('Call','BRCA-ML')]
-roc_obj <- roc(tmp$Call, tmp$`BRCA-ML`)
-d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn")))
+
+# Get ROC/PROC curve for BRCA-ML on CV set
+roc_obj <- roc(b1_cv$Call,b1_cv$Damaging)
+
+# Get metrics from cv-set
+cm = confusionMatrix(as.factor(b1_cv$Call), b1_cv$predict, positive="Damaging")
+tp=cm$table[1]
+fn=cm$table[2]
+fp=cm$table[3]
+tn=cm$table[4]
+sensitivity=cm$byClass[1]
+specificity=cm$byClass[2]
+# Add no call information
+missingness = (nrow(b1_DATA_SPLITS$train)-sum(cm$table))/nrow(b1_DATA_SPLITS$train) * 100
+threshold = b1_TRAINED_DATA$threshold
+model='BRCA-ML'
+d = data.frame(tp=tp,fp=fp,fn=fn,tn=tn,sensitivity=sensitivity,specificity=specificity, threshold=threshold, model=model, missingness=missingness)
 rownames(d)=NULL
 d = as.data.frame(d)
 d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
-d$model = 'BRCA-ML'
 
 # Add precision recall
-idx = which(tmp$Call=='Neutral')
+idx = which(b1_cv$Call=='Neutral')
 pr_1 = pr.curve(
-  scores.class0 = tmp$`BRCA-ML`[-idx],
-  scores.class1 = tmp$`BRCA-ML`[idx], 
+  scores.class0 = b1_cv$Damaging[-idx],
+  scores.class1 = b1_cv$Damaging[idx], 
   curve=TRUE,sorted = FALSE) 
 d$PRauc = pr_1$auc.integral
 
 res_roc_1$RES = rbind(res_roc_1$RES, d)
-
 
 ## Start getting curve info
 d1 = data.frame(sensitivities=roc_obj$sensitivities, specificities=roc_obj$specificities, auc = as.numeric(roc_obj$auc))
@@ -657,8 +825,6 @@ d2$Model = 'BRCA-ML'
 
 res_roc_1$ROC = rbind(res_roc_1$ROC, d1)
 res_roc_1$PROC = rbind(res_roc_1$PROC, d2)
-
-
 rm(d,d1,d2, tmp)
 
 p1 = res_roc_1$ROC %>%
@@ -671,45 +837,52 @@ p1 = res_roc_1$ROC %>%
   ggtitle('BRCA1') +
   theme(legend.position = "none")
 
-
-p1 + theme(legend.position="right")
-#ggsave(filename = paste0(wd,"/results/BRCA1_ROC.png"), width = 12, height = 6, units = "in", dpi = 300)
-
 ```
 
 Compute for BRCA2
 ```{r compute-brca2}
 res_roc_2 = compute_optimal(input_data=b2_DATA_SPLITS)
+```
 
-#Add in metrics from our current model
-tmp = b2_PREDICTIONS %>% 
-  filter(Variant %in% experimental_data$Variant)
-tmp = merge(tmp, experimental_data)
-tmp = tmp[,c('Call','BRCA-ML')]
-roc_obj <- roc(tmp$Call, tmp$`BRCA-ML`)
-d = as.data.frame(coords(roc_obj, "best", ret=c("threshold","sensitivity", "specificity","tp","tn","fp","fn")))
+
+```{r merge-brca2}
+# Get ROC/PROC curve for BRCA-ML on CV set
+roc_obj <- roc(b2_cv$Call, b2_cv$Damaging)
+
+# Get metrics from test set 
+cm = confusionMatrix(as.factor(b2_cv$Call), b2_cv$predict, positive="Damaging")
+tp=cm$table[1]
+fn=cm$table[2]
+fp=cm$table[3]
+tn=cm$table[4]
+sensitivity=cm$byClass[1]
+specificity=cm$byClass[2]
+# Add no call information
+missingness = (nrow(b2_TESTED_DATA$result)-sum(cm$table))/nrow(b2_TESTED_DATA$result) * 100
+threshold = b2_TRAINED_DATA$threshold
+model='BRCA-ML'
+d = data.frame(tp=tp,fp=fp,fn=fn,tn=tn,sensitivity=sensitivity,specificity=specificity, threshold=threshold, model=model, missingness=missingness)
 rownames(d)=NULL
 d = as.data.frame(d)
 d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
-d$model = 'BRCA-ML'
 
 # Add precision recall
-idx = which(tmp$Call=='Neutral')
-pr_1 = pr.curve(
-  scores.class0 = tmp$`BRCA-ML`[-idx],
-  scores.class1 = tmp$`BRCA-ML`[idx], 
+idx = which(b2_cv$Call=='Neutral')
+pr_2 = pr.curve(
+  scores.class0 = b2_cv$Damaging[-idx],
+  scores.class1 = b2_cv$Damaging[idx], 
   curve=TRUE,sorted = FALSE) 
-d$PRauc = pr_1$auc.integral
+d$PRauc = pr_2$auc.integral
 
 res_roc_2$RES = rbind(res_roc_2$RES, d)
-
-
 
 d1 = data.frame(sensitivities=roc_obj$sensitivities, specificities=roc_obj$specificities, auc = as.numeric(roc_obj$auc))
 d1$Model='BRCA-ML'
 
 d2 = pr_1$curve %>% as.data.frame()
 d2$Model='BRCA-ML'
+
+
 res_roc_2$ROC = rbind(res_roc_2$ROC, d1)
 res_roc_2$PROC = rbind(res_roc_2$PROC, d2)
 rm(d,d1,tmp)
@@ -723,19 +896,12 @@ p2 = res_roc_2$ROC %>%
   ylab("Sensitivity") +
   ggtitle('BRCA2') 
 
-p2 + theme(legend.position="right")
-
-#ggsave(filename = paste0(wd,"/results/BRCA2_ROC.png"), width = 12, height = 6, units = "in", dpi = 300)
-
 ```
 
 
 Make a combined image
 ```{r combine-p1-p2}
 ggarrange(p1, p2,ncol=2, nrow=1, common.legend = TRUE, legend = "bottom")
-
-#ggsave(filename = paste0(wd,"/results/Combined_ROC.png"), width = 16, height = 8, units = "in", dpi = 300)
-
 ```
 
 Make PR Curves
@@ -753,8 +919,6 @@ p3 = PROC %>%
   ylab('Precision') +
   xlab("Recall")
 
-p3
-
 p4 = PROC %>% 
   filter(Gene == 'BRCA2') %>%
   ggplot(aes(x=V1, y=V2, color=Model)) + 
@@ -763,17 +927,13 @@ p4 = PROC %>%
   theme(legend.position = "right")+
   ylab('Precision') +
   xlab("Recall")
-
-p4
-
-ggarrange(p3, p4, common.legend = TRUE, legend = "bottom")
-#ggsave(filename = paste0(wd,"/results/Combined_PROC.png"), width = 16, height = 8, units = "in", dpi = 300)
-
 ```
-All together now
+
+All together now.  This represent the performance on the cross validation data for BRCA-ML (overfit on  all others).
 ```{r plot-pr}
-ggarrange(p1, p2, p3, p4, common.legend = TRUE, legend = "right")
-ggsave(filename = paste0(wd,"/results/Combined_PROC_ROC.png"), width = 14, height = 8, units = "in", dpi = 300)
+figure = ggarrange(p1, p2, p3, p4, common.legend = TRUE, legend = "right" )
+annotate_figure(figure, fig.lab ="Cross validation performance",fig.lab.size=18, fig.lab.face = 'bold', top = text_grob("", size = 14))
+ggsave(filename = "results/Combined_PROC_ROC.png", width = 14, height = 8, units = "in", dpi = 300)
 
 ```
 
@@ -791,20 +951,11 @@ tmp = rbind(tmp, tmp2)
 tmp = tmp %>%
   gather(key = "Model", value = 'Value',  `BRCA-ML`:BayesDel)
 
-# 05/27/20 Adding new code to make inference easier
+
 ## Assign damaging score
 tmp$Prediction='Neutral'
-if (train==TRUE){
-  threshold_b1=b1_TRAINED_DATA$threshold
-  threshold_b2=b2_TRAINED_DATA$threshold
-  
-}else{
-  threshold_b1=b1_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
-  threshold_b2=b2_TRAINED_DATA@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores$threshold[1]
-}
-
-idx1 = which(tmp$Gene == 'BRCA1' & tmp$Value >= threshold_b1 & tmp$Model == 'BRCA-ML')
-idx2 = which(tmp$Gene == 'BRCA2' & tmp$Value >= threshold_b2 & tmp$Model == 'BRCA-ML')
+idx1 = which(tmp$Gene == 'BRCA1' & tmp$Value >= b1_TRAINED_DATA$threshold & tmp$Model == 'BRCA-ML')
+idx2 = which(tmp$Gene == 'BRCA2' & tmp$Value >= b2_TRAINED_DATA$threshold & tmp$Model == 'BRCA-ML')
 
 bd_thresh = res_roc_1$RES %>% filter(model=='BayesDel') %>% select(threshold) %>% as.numeric()
 idx3 = which(tmp$Gene == 'BRCA1' & tmp$Value >= bd_thresh & tmp$Model == 'BayesDel')
@@ -821,21 +972,116 @@ tmp %>%
   facet_wrap(~Model+Gene, scales = "free", ncol=2) +
   theme(legend.position = "bottom")
 
-ggsave(filename = paste0(wd,"/results/PairPlot.png"), width = 14, height = 8, units = "in", dpi = 300)
-
-```
-
-Print AUPROC
-```{r print-summary}
-res_roc_1$RES$Gene='BRCA1'
-res_roc_2$RES$Gene='BRCA2'
-tmp = rbind(res_roc_1$RES, res_roc_2$RES)
-tmp %>%
-  dplyr::arrange(1-mcc)
+ggsave(filename = "results/PairPlot.png", width = 14, height = 8, units = "in", dpi = 300)
 ```
 
 ```{r}
-tmp %>%  
+get_metrics = function(truth_vector, predicted_class, model, num_rows, threshold=NA){
+  cm = confusionMatrix(truth_vector, predicted_class, positive="Damaging")
+  tp=cm$table[1]
+  fn=cm$table[2]
+  fp=cm$table[3]
+  tn=cm$table[4]
+  sensitivity=cm$byClass[1]
+  specificity=cm$byClass[2]
+  missingness = (num_rows-sum(cm$table))/num_rows * 100
+
+  d = data.frame(tp=tp,fp=fp,fn=fn,tn=tn,missingness=missingness,sensitivity=sensitivity,specificity=specificity, threshold=threshold, model=model)
+  rownames(d)=NULL
+  d = as.data.frame(d)
+  d$mcc = ((d$tp*d$tn) - (d$fp * d$fn)) / sqrt((as.numeric(d$tp + d$fp)*as.numeric(d$tp + d$fn)*as.numeric(d$tn + d$fp)*as.numeric(d$tn + d$fn)))
+  return(d)
+}
+```
+
+Calculate metrics on test set
+```{r print-summary}
+res_roc_1$RES$Gene='BRCA1'
+metrics_table = NULL
+
+for (i in 1:nrow(res_roc_1$RES)){
+  model = res_roc_1$RES[i,'model']
+  threshold = res_roc_1$RES[i,'threshold']
+  num_rows = nrow(b1_DATA_SPLITS$test)
+  if (model=='SiftScore'){
+    tmp = b1_DATA_SPLITS$test %>% select_('Call', paste(model))
+    names(tmp) = c('Call','Prediction')
+    tmp = tmp %>% 
+      mutate(Classification=ifelse(Prediction < threshold,'Damaging','Neutral')) %>%
+      mutate(Classification=as.factor(Classification))
+    tmp = get_metrics(tmp$Call, tmp$Classification, model, num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA1'
+    metrics_table = rbind(metrics_table, tmp)
+  }else if(model=='BRCA-ML'){
+    tmp = test_model(b1_DATA_SPLITS, b1_TRAINED_DATA$model, threshold = threshold)
+    tmp = get_metrics(tmp$result$Call, tmp$result$predict, 'BRCA-ML', num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA1'
+    metrics_table = rbind(metrics_table, tmp)
+    
+  }else{
+    tmp = b1_DATA_SPLITS$test %>% select_('Call', paste(model))
+    names(tmp) = c('Call','Prediction')
+    tmp = tmp %>% 
+      mutate(Classification=ifelse(Prediction > threshold,'Damaging','Neutral')) %>%
+      mutate(Classification=as.factor(Classification))
+    tmp = get_metrics(tmp$Call, tmp$Classification, model, num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA1'
+    metrics_table = rbind(metrics_table, tmp)
+  }
+}
+rm(i, tmp)
+```
+
+```{r}
+res_roc_2$RES$Gene='BRCA2'
+
+for (i in 1:nrow(res_roc_2$RES)){
+  model = res_roc_2$RES[i,'model']
+  threshold = res_roc_2$RES[i,'threshold']
+  num_rows = nrow(b2_DATA_SPLITS$test)
+
+  if (model=='SiftScore'){
+    tmp = b2_DATA_SPLITS$test %>% select_('Call', paste(model))
+    names(tmp) = c('Call','Prediction')
+    tmp = tmp %>% 
+      mutate(Classification=ifelse(Prediction < threshold,'Damaging','Neutral')) %>%
+      mutate(Classification=as.factor(Classification))
+    tmp = get_metrics(tmp$Call, tmp$Classification, model, num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA2'
+    metrics_table = rbind(metrics_table, tmp)
+  }else if(model=='BRCA-ML'){
+    tmp = test_model(b2_DATA_SPLITS, b2_TRAINED_DATA$model, threshold = threshold)
+    tmp = get_metrics(tmp$result$Call, tmp$result$predict, 'BRCA-ML', num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA2'
+    metrics_table = rbind(metrics_table, tmp)
+    
+  }else{
+    tmp = b2_DATA_SPLITS$test %>% select_('Call', paste(model))
+    names(tmp) = c('Call','Prediction')
+    tmp = tmp %>% 
+      mutate(Classification=ifelse(Prediction > threshold,'Damaging','Neutral')) %>%
+      mutate(Classification=as.factor(Classification))
+    tmp$Classification=factor(tmp$Classification,levels=c('Damaging','Neutral'))
+    tmp = get_metrics(tmp$Call, tmp$Classification, model, num_rows, threshold = threshold)
+    tmp$Gene = 'BRCA2'
+    metrics_table = rbind(metrics_table, tmp)
+  }
+}
+rm(i, tmp)
+
+```
+
+```{r}
+metrics_table %>% 
+  arrange(-mcc)
+```
+
+
+```{r}
+model_list = as.character(metrics_table$model)[order(as.character(metrics_table$model))]
+model_list = unique(model_list)
+metrics_table$model = factor(metrics_table$model, levels=model_list)
+metrics_table %>%  
   ggplot(aes(x=model, y=mcc, fill=Gene)) +
   geom_bar(stat='identity') +
   facet_grid(Gene~.) + 
@@ -844,8 +1090,7 @@ tmp %>%
   ylab('MCC') +
   xlab('')
 
-ggsave(filename = paste0(wd,"/results/MCC_plot.png"), width = 14, height = 6, units = "in", dpi = 300)
-
+ggsave(filename = "results/MCC_plot.png", width = 14, height = 6, units = "in", dpi = 300)
 ```
 
 Add HGVS Nomenclature
@@ -860,26 +1105,29 @@ TABLE_S2 = TABLE_S2 %>%
 
 Save table S2.
 ```{r write-table}
+# Update BRCA-ML Label to contain a version number
+version='1.1'
+idx1=which(names(TABLE_S2)=='BRCA-ML')
+idx2=which(names(TABLE_S2)=='Prediction')
+names(TABLE_S2)[idx1] = paste('BRCA-ML', version, sep='.')
+names(TABLE_S2)[idx2] = paste('BRCA-ML', version, 'Prediction', sep='.')
+
 write.table(TABLE_S2, file='results/TableS2.tsv', sep='\t', row.names = FALSE)
 ```
 
-Show Variable Importances for BRCA1 (only when training)
+Show Variable Importances for BRCA1
 ```{r}
-#b1_TRAINED_DATA$vi
+b1_TRAINED_DATA$model@model$model_summary
+b1_TRAINED_DATA$vi
 ```
 
-Show Variable Importances for BRCA2 (only when training)
+Show Variable Importances for BRCA2
 ```{r}
-#b2_TRAINED_DATA$vi
+b2_TRAINED_DATA$model@model$model_summary
+b2_TRAINED_DATA$vi
 ```
 
-```{r}
-b1_TESTED_DATA$cm
-```
-
-```{r}
-b2_TESTED_DATA$cm
-```
 ```{r save}
-save.image(file="working/v3.4.RData")
+save.image(file="working/v3.4_rel2.RData")
+sessionInfo()
 ```
