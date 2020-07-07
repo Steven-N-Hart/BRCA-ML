@@ -7,12 +7,18 @@ output:
     keep_md: true
 ---
 
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-wd = getwd()
 options(width = 1800)
 knitr::opts_chunk$set(fig.width=12, fig.height=8, echo=TRUE, warning=FALSE, message=FALSE)
-
 
 library(tidyverse)
 library(data.table)
@@ -22,11 +28,13 @@ library(pROC)
 library(PRROC)
 library(ggpubr)
 library(e1071)
+library(knitr)
 
 # Change to TRUE to generate new models
 train=FALSE
-v_fold_nest = 5
+v_fold_nest = 10
 training_time_limit=3600
+set.seed(999)
 ```
 
 ```{r get-aligngvgd-data}
@@ -78,9 +86,6 @@ all_annotations = all_annotations[,keep]
 rm(keep, j)
 #glimpse(all_annotations)
 ```
-
-
-# This should be on test set?
 
 Plot all predictions
 ```{r eval = FALSE, echo = FALSE}
@@ -308,7 +313,7 @@ Findlay_df = filter_to_target_regions(Findlay_df, variant_search = TRUE)
 rm(Fin_df, Findaly)
 ```
 
-```{r combine-inputs}
+```{r combine-inputs, results='as-is'}
 #######################################################################################################################################
 # Combine experimental datasets
 experimental_data = rbind(Hart_df, Fernandes_df, Starita_df, Findlay_df)
@@ -545,7 +550,7 @@ plot_full_gene = function(data, title, splits = splits, model_name='BRCA-ML', t_
     }else{
       bx_input = b2_DATA_SPLITS$train
     }
-    bx_DATA_SPLITS = k_fold_split_data(bx_input)  # change to k-fold CV, 2020-05-28
+    bx_DATA_SPLITS = k_fold_split_data(bx_input, k = v_fold_nest)  # change to k-fold CV, 2020-05-28
     
     preds = NULL
     for(v in 1:v_fold_nest) {
@@ -614,7 +619,7 @@ if (train==TRUE){
 ```
 
 Train
-```{r train_brca1}
+```{r train_brca1, echo = FALSE}
 if (train==TRUE){
   b1_TRAINED_DATA = train_model(b1_DATA_SPLITS)
 }else{
@@ -638,7 +643,7 @@ b1_PLOTS = plot_full_gene(b1_PREDICTIONS,
                                t_ = b1_TRAINED_DATA$threshold )
 ```
 
-```{r train_brca2}
+```{r train_brca2, echo = FALSE}
 
 #BRCA2
 
@@ -1071,9 +1076,10 @@ rm(i, tmp)
 
 ```
 
-```{r}
+```{r  metrics, results='as-is'}
 metrics_table %>% 
-  arrange(-mcc)
+  arrange(-mcc) %>%
+  kable()
 ```
 
 
@@ -1116,18 +1122,18 @@ write.table(TABLE_S2, file='results/TableS2.tsv', sep='\t', row.names = FALSE)
 ```
 
 Show Variable Importances for BRCA1
-```{r}
+```{r b1_vi}
 b1_TRAINED_DATA$model@model$model_summary
-b1_TRAINED_DATA$vi
+kable(b1_TRAINED_DATA$vi)
 ```
 
 Show Variable Importances for BRCA2
 ```{r}
 b2_TRAINED_DATA$model@model$model_summary
-b2_TRAINED_DATA$vi
+kable(b2_TRAINED_DATA$vi)
 ```
 
 ```{r save}
-save.image(file="working/v3.4_rel2.RData")
+#save.image(file="working/v3.4_rel2.RData")
 sessionInfo()
 ```
