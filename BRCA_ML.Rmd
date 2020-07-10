@@ -1,7 +1,7 @@
 ---
 title: "v3.4"
 author: "Steven N. Hart, Ph.D"
-date: '7/10/2020'
+date: "`r Sys.Date()`"
 output:
   html_document:
     keep_md: true
@@ -619,7 +619,7 @@ if (train==TRUE){
 ```
 
 Train
-```{r train_brca1, echo = FALSE}
+```{r train_brca1, results="hide"}
 if (train==TRUE){
   b1_TRAINED_DATA = train_model(b1_DATA_SPLITS)
 }else{
@@ -643,7 +643,7 @@ b1_PLOTS = plot_full_gene(b1_PREDICTIONS,
                                t_ = b1_TRAINED_DATA$threshold )
 ```
 
-```{r train_brca2, echo = FALSE}
+```{r train_brca2, results="hide"}
 
 #BRCA2
 
@@ -1000,7 +1000,7 @@ get_metrics = function(truth_vector, predicted_class, model, num_rows, threshold
 ```
 
 Calculate metrics on test set
-```{r print-summary, echo=FALSE}
+```{r print-summary, results='hide'}
 res_roc_1$RES$Gene='BRCA1'
 metrics_table = NULL
 
@@ -1037,7 +1037,7 @@ for (i in 1:nrow(res_roc_1$RES)){
 rm(i, tmp)
 ```
 
-```{r}
+```{r print-summary2, results='hide'}
 res_roc_2$RES$Gene='BRCA2'
 
 for (i in 1:nrow(res_roc_2$RES)){
@@ -1102,12 +1102,12 @@ for (r in 1:nrow(metrics_table)){
 
 ```
 
-```{r  metrics, results='as-is'}
+```{r  metrics}
 metrics_table %>% 
   filter(missingness < 1) %>%
   arrange(-mcc) %>%
   mutate(mcc=round(mcc,2)) %>%
-  kable()
+  kable(format = "html")
 ```
 
 
@@ -1152,16 +1152,16 @@ write.table(TABLE_S2, file='results/TableS2.tsv', sep='\t', row.names = FALSE)
 Show Variable Importances for BRCA1
 ```{r b1_vi}
 b1_TRAINED_DATA$model@model$model_summary
-kable(b1_TRAINED_DATA$vi)
+kable(b1_TRAINED_DATA$vi, format = "html")
 ```
 
 Show Variable Importances for BRCA2
 ```{r}
 b2_TRAINED_DATA$model@model$model_summary
-kable(b2_TRAINED_DATA$vi)
+kable(b2_TRAINED_DATA$vi, format = "html")
 ```
 
 ```{r save}
-#save.image(file="working/v3.4_rel2.RData")
+save.image(file="working/v3.4_rel2.RData")
 sessionInfo()
 ```
