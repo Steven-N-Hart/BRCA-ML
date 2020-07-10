@@ -573,7 +573,7 @@ plot_full_gene = function(data, title, splits = splits, model_name='BRCA-ML', t_
         pred = cbind(pred, test_v)
         preds = rbind(preds, pred)
 
-        write.csv(preds, file=paste0(gene,'_res.fold',v,'.csv'))
+        write.csv(preds, file=paste0('results/', gene,'_res.fold',v,'.csv'))
     }
     return(preds)
   }
@@ -608,9 +608,9 @@ if (train==TRUE){
   for (v in 1:v_fold_nest){
     b1_cv = NULL
     b2_cv = NULL
-    b1 = read.csv(paste0('BRCA1_res.fold',v,'.csv'))
+    b1 = read.csv(paste0('results/','BRCA1_res.fold',v,'.csv'))
     b1_cv = rbind(b1_cv, b1)
-    b2 = read.csv(paste0('BRCA2_res.fold',v,'.csv'))
+    b2 = read.csv(paste0('results/','BRCA2_res.fold',v,'.csv'))
     b2_cv = rbind(b2_cv, b2)
     b1_cv = na.omit(b1_cv)
     b2_cv = na.omit(b2_cv)
@@ -659,7 +659,7 @@ if (train==TRUE){
   cv_groups=NULL
   b2_cv_holdouts=NULL
   for (i in 1:v_fold_nest){
-    tmp = read.csv(paste0('BRCA2_res.fold',i,'.csv'))
+    tmp = read.csv(paste0('results/BRCA2_res.fold',i,'.csv'))
 
     test = as.h2o(tmp)
     pred = h2o.predict(model_out, newdata = test)
@@ -1000,7 +1000,7 @@ get_metrics = function(truth_vector, predicted_class, model, num_rows, threshold
 ```
 
 Calculate metrics on test set
-```{r print-summary}
+```{r print-summary, echo=FALSE}
 res_roc_1$RES$Gene='BRCA1'
 metrics_table = NULL
 
@@ -1076,9 +1076,37 @@ rm(i, tmp)
 
 ```
 
+Add confidence intervals
+```{r cis}
+add_ci = function(true1, false1, false2){
+  correct = true1
+  incorrect = sum(false1,false2)
+  ci_ = tryCatch({
+    res = prop.test(x = correct, n = incorrect, correct = FALSE)
+    lci = round(res$conf.int[1],3)
+    uci = round(res$conf.int[2],3)
+    ci_ = paste(lci, uci, sep="-")
+    return(ci_)
+  },
+  error=function(cond){
+    return("-")
+  }
+  )
+}
+metrics_table$sensitivity_ci = NULL
+metrics_table$specificity_ci = NULL
+for (r in 1:nrow(metrics_table)){
+  metrics_table$sensitivity_ci[r] = add_ci(metrics_table$tp[r], metrics_table$tp[r], metrics_table$fn[r])
+  metrics_table$specificity_ci[r] = add_ci(metrics_table$tn[r], metrics_table$tn[r], metrics_table$fp[r])
+}
+
+```
+
 ```{r  metrics, results='as-is'}
 metrics_table %>% 
+  filter(missingness < 1) %>%
   arrange(-mcc) %>%
+  mutate(mcc=round(mcc,2)) %>%
   kable()
 ```
 
